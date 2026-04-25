@@ -3,8 +3,17 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Letter "N" centered in the safe zone (24-84) -->
+    <!-- Bold serif "N" matching the web app logo -->
+    <!-- Left vertical stroke -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M38,36 L38,72 L44,72 L44,48 L58,72 L64,72 L64,36 L58,36 L58,60 L44,36 Z"/>
+        android:pathData="M36,33 L47,33 L47,38 L42,38 L42,70 L47,70 L47,75 L36,75 Z"/>
+    <!-- Right vertical stroke -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M61,33 L72,33 L72,75 L61,75 L61,70 L66,70 L66,38 L61,38 Z"/>
+    <!-- Diagonal stroke -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M42,33 L47,33 L66,75 L61,75 Z"/>
 </vector>
