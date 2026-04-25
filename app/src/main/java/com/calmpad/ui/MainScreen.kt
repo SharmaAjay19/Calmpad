@@ -719,7 +719,7 @@ private fun BottomToolbar(
                     Icon(Icons.Default.Image, contentDescription = "Image", tint = colors.onSurface, modifier = Modifier.size(24.dp))
                 }
                 IconButton(onClick = onList) {
-                    Icon(Icons.AutoMirrored.Default.FormatListBulleted, contentDescription = "List", tint = colors.onSurface, modifier = Modifier.size(24.dp))
+                    Icon(Icons.Default.List, contentDescription = "List", tint = colors.onSurface, modifier = Modifier.size(24.dp))
                 }
             }
             IconButton(onClick = onMore) {
