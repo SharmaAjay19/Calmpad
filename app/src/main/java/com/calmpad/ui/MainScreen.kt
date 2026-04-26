@@ -1056,6 +1056,8 @@ private class TextPrintAdapter(
     private val content: String,
 ) : PrintDocumentAdapter() {
 
+    private val imgPattern = Regex("""\{\{img:(.+?)\}\}""")
+
     override fun onLayout(
         oldAttributes: PrintAttributes?,
         newAttributes: PrintAttributes,
@@ -1098,6 +1100,16 @@ private class TextPrintAdapter(
         var page = pdfDoc.startPage(pageInfo)
         var canvas = page.canvas
 
+        // Helper to start a new page
+        fun newPage() {
+            pdfDoc.finishPage(page)
+            pageNumber++
+            pageInfo = PdfDocument.PageInfo.Builder(pageWidth, pageHeight, pageNumber).create()
+            page = pdfDoc.startPage(pageInfo)
+            canvas = page.canvas
+            yPosition = margin.toFloat()
+        }
+
         // Draw title
         val titleLayout = StaticLayout.Builder.obtain(title, 0, title.length, titlePaint, usableWidth)
             .setAlignment(Layout.Alignment.ALIGN_NORMAL)
@@ -1109,31 +1121,84 @@ private class TextPrintAdapter(
         canvas.restore()
         yPosition += titleLayout.height + 20
 
-        // Draw content
-        val contentLayout = StaticLayout.Builder.obtain(content, 0, content.length, textPaint, usableWidth)
-            .setAlignment(Layout.Alignment.ALIGN_NORMAL)
-            .setLineSpacing(0f, 1.5f)
-            .build()
-
-        for (i in 0 until contentLayout.lineCount) {
-            val lineTop = contentLayout.getLineTop(i).toFloat()
-            val lineBottom = contentLayout.getLineBottom(i).toFloat()
-            val lineHeight = lineBottom - lineTop
-
-            if (yPosition + lineHeight > pageHeight - margin) {
-                pdfDoc.finishPage(page)
-                pageNumber++
-                pageInfo = PdfDocument.PageInfo.Builder(pageWidth, pageHeight, pageNumber).create()
-                page = pdfDoc.startPage(pageInfo)
-                canvas = page.canvas
-                yPosition = margin.toFloat()
+        // Parse content into text and image segments
+        val segments = mutableListOf<Pair<Boolean, String>>() // (isImage, value)
+        var lastEnd = 0
+        for (match in imgPattern.findAll(content)) {
+            if (match.range.first > lastEnd) {
+                segments.add(false to content.substring(lastEnd, match.range.first))
             }
+            segments.add(true to match.groupValues[1])
+            lastEnd = match.range.last + 1
+        }
+        if (lastEnd < content.length) {
+            segments.add(false to content.substring(lastEnd))
+        }
 
-            canvas.save()
-            canvas.translate(margin.toFloat(), yPosition - lineTop)
-            contentLayout.draw(canvas)
-            canvas.restore()
-            yPosition += lineHeight
+        for ((isImage, value) in segments) {
+            if (isImage) {
+                // Draw image
+                val imageFile = ImageStorage.getImageFile(context, value)
+                if (imageFile.exists()) {
+                    val opts = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    android.graphics.BitmapFactory.decodeFile(imageFile.absolutePath, opts)
+                    val origW = opts.outWidth
+                    val origH = opts.outHeight
+                    if (origW > 0 && origH > 0) {
+                        // Scale to fit usable width, cap height at half page
+                        val scale = (usableWidth.toFloat() / origW).coerceAtMost(1f)
+                        val drawW = (origW * scale).toInt()
+                        val drawH = (origH * scale).toInt().coerceAtMost((pageHeight - 2 * margin) / 2)
+
+                        // Need new page?
+                        if (yPosition + drawH + 16 > pageHeight - margin) {
+                            newPage()
+                        }
+
+                        // Decode scaled bitmap
+                        val sampleSize = (origW / drawW).coerceAtLeast(1)
+                        val decodeOpts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sampleSize }
+                        val bitmap = android.graphics.BitmapFactory.decodeFile(imageFile.absolutePath, decodeOpts)
+                        if (bitmap != null) {
+                            val destRect = android.graphics.RectF(
+                                margin.toFloat(),
+                                yPosition + 8f,
+                                margin.toFloat() + drawW,
+                                yPosition + 8f + drawH
+                            )
+                            canvas.drawBitmap(bitmap, null, destRect, null)
+                            bitmap.recycle()
+                            yPosition += drawH + 16
+                        }
+                    }
+                }
+            } else {
+                // Draw text segment line by line
+                val textToDraw = value.trimEnd()
+                if (textToDraw.isEmpty()) continue
+                val segLayout = StaticLayout.Builder.obtain(textToDraw, 0, textToDraw.length, textPaint, usableWidth)
+                    .setAlignment(Layout.Alignment.ALIGN_NORMAL)
+                    .setLineSpacing(0f, 1.5f)
+                    .build()
+
+                for (i in 0 until segLayout.lineCount) {
+                    val lineTop = segLayout.getLineTop(i).toFloat()
+                    val lineBottom = segLayout.getLineBottom(i).toFloat()
+                    val lineHeight = lineBottom - lineTop
+
+                    if (yPosition + lineHeight > pageHeight - margin) {
+                        newPage()
+                    }
+
+                    canvas.save()
+                    canvas.translate(margin.toFloat(), yPosition - lineTop)
+                    // Only draw the current line by clipping
+                    canvas.clipRect(0f, lineTop, usableWidth.toFloat(), lineBottom)
+                    segLayout.draw(canvas)
+                    canvas.restore()
+                    yPosition += lineHeight
+                }
+            }
         }
 
         pdfDoc.finishPage(page)
