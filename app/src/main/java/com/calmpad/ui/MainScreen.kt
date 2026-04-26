@@ -3,6 +3,8 @@ package com.calmpad.ui
 import android.content.Context
 import android.content.Intent
 import android.graphics.pdf.PdfDocument
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import android.print.PrintAttributes
 import android.print.PrintDocumentAdapter
 import android.print.PrintDocumentInfo
@@ -29,6 +31,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -273,6 +280,33 @@ fun MainScreen(viewModel: CalmPadViewModel = hiltViewModel()) {
     }
     val pickImage = { imagePicker.launch("image/*") }
 
+    // Voice typing — uses system SpeechRecognizer (same engine as keyboard mic)
+    var isListening by remember { mutableStateOf(false) }
+    val speechLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        isListening = false
+        val matches = result.data
+            ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+        val transcript = matches?.firstOrNull()
+        if (!transcript.isNullOrBlank()) {
+            // Insert with a space before if cursor isn't at start of line
+            val pos = contentTfv.selection.min
+            val text = contentTfv.text
+            val prefix = if (pos > 0 && text.getOrNull(pos - 1)?.let { it != '\n' && it != ' ' } == true) " " else ""
+            updateContent(insertAtCursor(contentTfv, "$prefix$transcript"))
+        }
+    }
+    val startVoiceTyping = {
+        isListening = true
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+            putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak to add text to your note")
+        }
+        speechLauncher.launch(intent)
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -337,11 +371,13 @@ fun MainScreen(viewModel: CalmPadViewModel = hiltViewModel()) {
             ) {
                 BottomToolbar(
                     colors = colors,
+                    isListening = isListening,
                     onMenuClick = { viewModel.toggleSidebar() },
                     onBold = applyBold,
                     onCheckbox = insertCheckbox,
                     onImage = pickImage,
                     onList = insertBullet,
+                    onVoice = startVoiceTyping,
                     onMore = { viewModel.toggleToolsPanel() }
                 )
             }
@@ -986,13 +1022,27 @@ private fun NoteEditorPane(
 @Composable
 private fun BottomToolbar(
     colors: CalmPadColorScheme,
+    isListening: Boolean,
     onMenuClick: () -> Unit,
     onBold: () -> Unit,
     onCheckbox: () -> Unit,
     onImage: () -> Unit,
     onList: () -> Unit,
+    onVoice: () -> Unit,
     onMore: () -> Unit,
 ) {
+    // Pulsing animation for the mic button while listening
+    val infiniteTransition = rememberInfiniteTransition(label = "mic_pulse")
+    val micAlpha by infiniteTransition.animateFloat(
+        initialValue = 1f,
+        targetValue = 0.3f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(600),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "mic_alpha"
+    )
+
     Surface(
         modifier = Modifier.fillMaxWidth(),
         color = colors.background,
@@ -1010,18 +1060,35 @@ private fun BottomToolbar(
             IconButton(onClick = onMenuClick) {
                 Icon(Icons.Default.Menu, contentDescription = "Sidebar", tint = colors.muted, modifier = Modifier.size(24.dp))
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 IconButton(onClick = onCheckbox) {
-                    Icon(Icons.Default.CheckBox, contentDescription = "Checkbox", tint = colors.accent, modifier = Modifier.size(24.dp))
+                    Icon(Icons.Default.CheckBox, contentDescription = "Checkbox", tint = colors.accent, modifier = Modifier.size(22.dp))
                 }
                 IconButton(onClick = onBold) {
-                    Icon(Icons.Default.FormatBold, contentDescription = "Bold", tint = colors.onSurface, modifier = Modifier.size(24.dp))
+                    Icon(Icons.Default.FormatBold, contentDescription = "Bold", tint = colors.onSurface, modifier = Modifier.size(22.dp))
                 }
                 IconButton(onClick = onImage) {
-                    Icon(Icons.Default.Image, contentDescription = "Image", tint = colors.onSurface, modifier = Modifier.size(24.dp))
+                    Icon(Icons.Default.Image, contentDescription = "Image", tint = colors.onSurface, modifier = Modifier.size(22.dp))
                 }
                 IconButton(onClick = onList) {
-                    Icon(Icons.Default.List, contentDescription = "List", tint = colors.onSurface, modifier = Modifier.size(24.dp))
+                    Icon(Icons.Default.List, contentDescription = "List", tint = colors.onSurface, modifier = Modifier.size(22.dp))
+                }
+                // Mic / voice typing button
+                IconButton(
+                    onClick = onVoice,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .background(
+                            color = if (isListening) colors.accent.copy(alpha = 0.15f) else Color.Transparent,
+                            shape = CircleShape
+                        )
+                ) {
+                    Icon(
+                        imageVector = if (isListening) Icons.Default.MicOff else Icons.Default.Mic,
+                        contentDescription = if (isListening) "Stop listening" else "Voice type",
+                        tint = if (isListening) colors.accent.copy(alpha = micAlpha) else colors.onSurface,
+                        modifier = Modifier.size(22.dp)
+                    )
                 }
             }
             IconButton(onClick = onMore) {
