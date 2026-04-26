@@ -39,12 +39,18 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.input.TransformedText
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -110,6 +116,96 @@ private fun prefixLine(tfv: TextFieldValue, prefix: String): TextFieldValue {
     val lineStart = text.lastIndexOf('\n', (pos - 1).coerceAtLeast(0)) + 1
     val newText = text.substring(0, lineStart) + prefix + text.substring(lineStart)
     return TextFieldValue(newText, TextRange(pos + prefix.length))
+}
+
+private fun formattedAnnotatedString(
+    rawText: String,
+    baseColor: Color,
+    highlightColor: Color,
+): AnnotatedString {
+    val builder = AnnotatedString.Builder(rawText)
+
+    fun hideRange(start: Int, end: Int) {
+        if (start < end) {
+            builder.addStyle(
+                SpanStyle(color = Color.Transparent, fontSize = 0.1.sp),
+                start,
+                end
+            )
+        }
+    }
+
+    // Headings (# / ##) at line start
+    val headingRegex = Regex("(?m)^(##?)\\s+(.+)$")
+    headingRegex.findAll(rawText).forEach { match ->
+        val prefix = match.groups[1] ?: return@forEach
+        val body = match.groups[2] ?: return@forEach
+        hideRange(prefix.range.first, body.range.first)
+        val fontSize = if (prefix.value == "#") 30.sp else 24.sp
+        builder.addStyle(
+            SpanStyle(
+                fontWeight = FontWeight.Bold,
+                fontSize = fontSize,
+                color = baseColor
+            ),
+            body.range.first,
+            body.range.last + 1
+        )
+    }
+
+    // Bold **text**
+    Regex("\\*\\*(.+?)\\*\\*").findAll(rawText).forEach { match ->
+        val start = match.range.first
+        val endExclusive = match.range.last + 1
+        val contentStart = start + 2
+        val contentEnd = endExclusive - 2
+        hideRange(start, contentStart)
+        hideRange(contentEnd, endExclusive)
+        if (contentStart < contentEnd) {
+            builder.addStyle(SpanStyle(fontWeight = FontWeight.Bold, color = baseColor), contentStart, contentEnd)
+        }
+    }
+
+    // Underline __text__
+    Regex("__(.+?)__").findAll(rawText).forEach { match ->
+        val start = match.range.first
+        val endExclusive = match.range.last + 1
+        val contentStart = start + 2
+        val contentEnd = endExclusive - 2
+        hideRange(start, contentStart)
+        hideRange(contentEnd, endExclusive)
+        if (contentStart < contentEnd) {
+            builder.addStyle(SpanStyle(textDecoration = TextDecoration.Underline, color = baseColor), contentStart, contentEnd)
+        }
+    }
+
+    // Highlight ==text==
+    Regex("==(.+?)==").findAll(rawText).forEach { match ->
+        val start = match.range.first
+        val endExclusive = match.range.last + 1
+        val contentStart = start + 2
+        val contentEnd = endExclusive - 2
+        hideRange(start, contentStart)
+        hideRange(contentEnd, endExclusive)
+        if (contentStart < contentEnd) {
+            builder.addStyle(SpanStyle(background = highlightColor, color = baseColor), contentStart, contentEnd)
+        }
+    }
+
+    // Italic *text* (avoid **bold** tokens)
+    Regex("(?<!\\*)\\*(?!\\*)(.+?)(?<!\\*)\\*(?!\\*)").findAll(rawText).forEach { match ->
+        val start = match.range.first
+        val endExclusive = match.range.last + 1
+        val contentStart = start + 1
+        val contentEnd = endExclusive - 1
+        hideRange(start, contentStart)
+        hideRange(contentEnd, endExclusive)
+        if (contentStart < contentEnd) {
+            builder.addStyle(SpanStyle(fontStyle = FontStyle.Italic, color = baseColor), contentStart, contentEnd)
+        }
+    }
+
+    return builder.toAnnotatedString()
 }
 
 @Composable
@@ -657,6 +753,18 @@ private fun NoteEditorPane(
         "mono" -> FontFamily.Monospace
         else -> FontFamily.SansSerif
     }
+    val contentVisualTransformation = remember(colors.onSurface, colors.accent) {
+        VisualTransformation { original ->
+            TransformedText(
+                formattedAnnotatedString(
+                    rawText = original.text,
+                    baseColor = colors.onSurface,
+                    highlightColor = colors.accent.copy(alpha = 0.25f)
+                ),
+                OffsetMapping.Identity
+            )
+        }
+    }
 
     Column(modifier = modifier) {
         // Status bar
@@ -748,6 +856,7 @@ private fun NoteEditorPane(
                             fontFamily = fontFamily
                         ),
                         cursorBrush = SolidColor(colors.accent),
+                        visualTransformation = contentVisualTransformation,
                         modifier = Modifier.fillMaxWidth(),
                         decorationBox = { innerTextField ->
                             if (contentTfv.text.isEmpty()) {
@@ -830,6 +939,7 @@ private fun NoteEditorPane(
                                     fontFamily = fontFamily
                                 ),
                                 cursorBrush = SolidColor(colors.accent),
+                                visualTransformation = contentVisualTransformation,
                                 modifier = Modifier.fillMaxWidth(),
                                 decorationBox = { innerTextField ->
                                     if (segText.isEmpty() && index == 0 && segments.size <= 2) {
