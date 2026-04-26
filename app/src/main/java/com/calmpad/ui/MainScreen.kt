@@ -42,6 +42,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -56,13 +57,67 @@ import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.*
 
+// ── Text Formatting Helpers ──
+
+private fun wrapSelection(tfv: TextFieldValue, prefix: String, suffix: String = prefix): TextFieldValue {
+    val sel = tfv.selection
+    val text = tfv.text
+    return if (sel.collapsed) {
+        // No selection — insert markers at cursor
+        val newText = text.substring(0, sel.start) + prefix + suffix + text.substring(sel.start)
+        TextFieldValue(newText, TextRange(sel.start + prefix.length))
+    } else {
+        // Wrap selected text
+        val selected = text.substring(sel.min, sel.max)
+        val newText = text.substring(0, sel.min) + prefix + selected + suffix + text.substring(sel.max)
+        TextFieldValue(newText, TextRange(sel.min + prefix.length, sel.max + prefix.length))
+    }
+}
+
+private fun insertAtCursor(tfv: TextFieldValue, insert: String): TextFieldValue {
+    val pos = tfv.selection.min
+    val newText = tfv.text.substring(0, pos) + insert + tfv.text.substring(pos)
+    return TextFieldValue(newText, TextRange(pos + insert.length))
+}
+
+private fun prefixLine(tfv: TextFieldValue, prefix: String): TextFieldValue {
+    val text = tfv.text
+    val pos = tfv.selection.min
+    val lineStart = text.lastIndexOf('\n', (pos - 1).coerceAtLeast(0)) + 1
+    val newText = text.substring(0, lineStart) + prefix + text.substring(lineStart)
+    return TextFieldValue(newText, TextRange(pos + prefix.length))
+}
+
 @Composable
 fun MainScreen(viewModel: CalmPadViewModel = hiltViewModel()) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val colors = appColorScheme(state.theme)
     val context = LocalContext.current
 
-    // File launchers for backup/import
+    // Shared content TextFieldValue state (hoisted here so toolbars can modify it)
+    val activeNote = state.notes.find { it.id == state.activeNoteId }
+    var contentTfv by remember(activeNote?.id) {
+        mutableStateOf(TextFieldValue(activeNote?.content ?: ""))
+    }
+    val updateContent: (TextFieldValue) -> Unit = { newTfv ->
+        contentTfv = newTfv
+        viewModel.updateNoteContent(newTfv.text)
+    }
+
+    // Formatting lambdas
+    val applyBold = { updateContent(wrapSelection(contentTfv, "**")) }
+    val applyItalic = { updateContent(wrapSelection(contentTfv, "*")) }
+    val applyUnderline = { updateContent(wrapSelection(contentTfv, "__")) }
+    val applyHighlight = { updateContent(wrapSelection(contentTfv, "==")) }
+    val insertCheckbox = { updateContent(insertAtCursor(contentTfv, "☐ ")) }
+    val insertBullet = { updateContent(prefixLine(contentTfv, "• ")) }
+    val insertH1 = { updateContent(prefixLine(contentTfv, "# ")) }
+    val insertH2 = { updateContent(prefixLine(contentTfv, "## ")) }
+    val insertTable = {
+        updateContent(insertAtCursor(contentTfv, "\n| Header 1 | Header 2 |\n|----------|----------|\n| Data 1   | Data 2   |\n"))
+    }
+
+    // File launchers
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/json")
     ) { uri ->
@@ -85,6 +140,17 @@ fun MainScreen(viewModel: CalmPadViewModel = hiltViewModel()) {
         }
     }
 
+    // Image picker
+    val imagePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri ->
+        uri?.let {
+            val name = uri.lastPathSegment ?: "image"
+            updateContent(insertAtCursor(contentTfv, "\n[Image: $name]\n"))
+        }
+    }
+    val pickImage = { imagePicker.launch("image/*") }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -92,11 +158,12 @@ fun MainScreen(viewModel: CalmPadViewModel = hiltViewModel()) {
             .systemBarsPadding()
     ) {
         Row(modifier = Modifier.fillMaxSize()) {
-            // Note editor (main content)
             NoteEditorPane(
                 state = state,
                 colors = colors,
                 viewModel = viewModel,
+                contentTfv = contentTfv,
+                onContentChange = updateContent,
                 onMenuClick = { viewModel.toggleSidebar() },
                 onExport = {
                     val date = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
@@ -115,14 +182,12 @@ fun MainScreen(viewModel: CalmPadViewModel = hiltViewModel()) {
             exit = slideOutHorizontally { -it } + fadeOut()
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
-                // Scrim
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .background(Color.Black.copy(alpha = 0.5f))
                         .clickable { viewModel.setSidebarVisible(false) }
                 )
-                // Sidebar panel
                 SidebarPanel(
                     state = state,
                     colors = colors,
@@ -151,10 +216,10 @@ fun MainScreen(viewModel: CalmPadViewModel = hiltViewModel()) {
                 BottomToolbar(
                     colors = colors,
                     onMenuClick = { viewModel.toggleSidebar() },
-                    onBold = { /* formatting */ },
-                    onCheckbox = { /* formatting */ },
-                    onImage = { /* formatting */ },
-                    onList = { /* formatting */ },
+                    onBold = applyBold,
+                    onCheckbox = insertCheckbox,
+                    onImage = pickImage,
+                    onList = insertBullet,
                     onMore = { viewModel.toggleToolsPanel() }
                 )
             }
@@ -171,17 +236,18 @@ fun MainScreen(viewModel: CalmPadViewModel = hiltViewModel()) {
                 state = state,
                 colors = colors,
                 onDismiss = { viewModel.dismissToolsPanel() },
-                onH1 = { /* formatting */ },
-                onH2 = { /* formatting */ },
-                onTable = { /* formatting */ },
-                onHighlight = { /* formatting */ },
-                onItalic = { /* formatting */ },
-                onUnderline = { /* formatting */ },
+                onH1 = { insertH1(); viewModel.dismissToolsPanel() },
+                onH2 = { insertH2(); viewModel.dismissToolsPanel() },
+                onTable = { insertTable(); viewModel.dismissToolsPanel() },
+                onHighlight = { applyHighlight(); viewModel.dismissToolsPanel() },
+                onItalic = { applyItalic(); viewModel.dismissToolsPanel() },
+                onUnderline = { applyUnderline(); viewModel.dismissToolsPanel() },
                 onFontToggle = {
                     viewModel.setFont(if (state.fontFamily == "sans") "serif" else "sans")
+                    viewModel.dismissToolsPanel()
                 },
                 onThemeToggle = { viewModel.cycleTheme() },
-                onPrint = { printNote(context, viewModel) }
+                onPrint = { printNote(context, viewModel); viewModel.dismissToolsPanel() }
             )
         }
     }
@@ -550,6 +616,8 @@ private fun NoteEditorPane(
     state: CalmPadState,
     colors: CalmPadColorScheme,
     viewModel: CalmPadViewModel,
+    contentTfv: TextFieldValue,
+    onContentChange: (TextFieldValue) -> Unit,
     onMenuClick: () -> Unit,
     onExport: () -> Unit,
     onPrintNote: () -> Unit,
@@ -625,11 +693,10 @@ private fun NoteEditorPane(
                 }
             )
 
-            // Content
-            var contentText by remember(activeNote.id) { mutableStateOf(activeNote.content) }
+            // Content — using TextFieldValue for cursor-aware formatting
             BasicTextField(
-                value = contentText,
-                onValueChange = { contentText = it; viewModel.updateNoteContent(it) },
+                value = contentTfv,
+                onValueChange = onContentChange,
                 textStyle = TextStyle(
                     fontSize = 18.sp,
                     color = colors.onSurface,
@@ -641,10 +708,10 @@ private fun NoteEditorPane(
                     .fillMaxWidth()
                     .weight(1f)
                     .padding(horizontal = 24.dp)
-                    .padding(bottom = 80.dp) // Space for bottom toolbar
+                    .padding(bottom = 80.dp)
                     .verticalScroll(rememberScrollState()),
                 decorationBox = { innerTextField ->
-                    if (contentText.isEmpty()) {
+                    if (contentTfv.text.isEmpty()) {
                         Text(
                             "Start writing...",
                             fontSize = 18.sp,
