@@ -37,6 +37,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -49,7 +50,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.calmpad.data.Converters
+import com.calmpad.data.ImageStorage
 import com.calmpad.data.NoteEntity
 import com.calmpad.data.SectionEntity
 import com.calmpad.ui.theme.*
@@ -58,6 +62,26 @@ import java.text.SimpleDateFormat
 import java.util.*
 
 // ── Text Formatting Helpers ──
+
+/** Parse content into segments: (isImage, value) pairs. For images, value = filename. */
+private fun parseContentSegments(text: String, pattern: Regex): List<Pair<Boolean, String>> {
+    val segments = mutableListOf<Pair<Boolean, String>>()
+    var lastEnd = 0
+    for (match in pattern.findAll(text)) {
+        if (match.range.first > lastEnd) {
+            segments.add(false to text.substring(lastEnd, match.range.first))
+        }
+        segments.add(true to match.groupValues[1])
+        lastEnd = match.range.last + 1
+    }
+    if (lastEnd < text.length) {
+        segments.add(false to text.substring(lastEnd))
+    }
+    if (segments.isEmpty()) {
+        segments.add(false to "")
+    }
+    return segments
+}
 
 private fun wrapSelection(tfv: TextFieldValue, prefix: String, suffix: String = prefix): TextFieldValue {
     val sel = tfv.selection
@@ -145,8 +169,10 @@ fun MainScreen(viewModel: CalmPadViewModel = hiltViewModel()) {
         ActivityResultContracts.GetContent()
     ) { uri ->
         uri?.let {
-            val name = uri.lastPathSegment ?: "image"
-            updateContent(insertAtCursor(contentTfv, "\n[Image: $name]\n"))
+            val filename = ImageStorage.saveImage(context, it)
+            if (filename != null) {
+                updateContent(insertAtCursor(contentTfv, "\n{{img:$filename}}\n"))
+            }
         }
     }
     val pickImage = { imagePicker.launch("image/*") }
@@ -625,6 +651,7 @@ private fun NoteEditorPane(
     modifier: Modifier = Modifier,
 ) {
     val activeNote = state.notes.find { it.id == state.activeNoteId }
+    val context = LocalContext.current
     val fontFamily = when (state.fontFamily) {
         "serif" -> FontFamily.Serif
         "mono" -> FontFamily.Monospace
@@ -693,34 +720,132 @@ private fun NoteEditorPane(
                 }
             )
 
-            // Content — using TextFieldValue for cursor-aware formatting
-            BasicTextField(
-                value = contentTfv,
-                onValueChange = onContentChange,
-                textStyle = TextStyle(
-                    fontSize = 18.sp,
-                    color = colors.onSurface,
-                    lineHeight = 28.sp,
-                    fontFamily = fontFamily
-                ),
-                cursorBrush = SolidColor(colors.accent),
+            // Content — mixed text + images editor
+            val imgPattern = remember { Regex("""\{\{img:(.+?)\}\}""") }
+            val segments = remember(contentTfv.text) {
+                parseContentSegments(contentTfv.text, imgPattern)
+            }
+            val hasImages = segments.any { it.first }
+            val scrollState = rememberScrollState()
+
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
                     .padding(horizontal = 24.dp)
                     .padding(bottom = 80.dp)
-                    .verticalScroll(rememberScrollState()),
-                decorationBox = { innerTextField ->
-                    if (contentTfv.text.isEmpty()) {
-                        Text(
-                            "Start writing...",
+                    .verticalScroll(scrollState)
+            ) {
+                if (!hasImages) {
+                    // No images — use single editable field for best UX
+                    BasicTextField(
+                        value = contentTfv,
+                        onValueChange = onContentChange,
+                        textStyle = TextStyle(
                             fontSize = 18.sp,
-                            color = colors.muted.copy(alpha = 0.4f)
-                        )
+                            color = colors.onSurface,
+                            lineHeight = 28.sp,
+                            fontFamily = fontFamily
+                        ),
+                        cursorBrush = SolidColor(colors.accent),
+                        modifier = Modifier.fillMaxWidth(),
+                        decorationBox = { innerTextField ->
+                            if (contentTfv.text.isEmpty()) {
+                                Text(
+                                    "Start writing...",
+                                    fontSize = 18.sp,
+                                    color = colors.muted.copy(alpha = 0.4f)
+                                )
+                            }
+                            innerTextField()
+                        }
+                    )
+                } else {
+                    // Mixed content — render text chunks and images
+                    segments.forEachIndexed { index, (isImage, value) ->
+                        if (isImage) {
+                            val imageFile = ImageStorage.getImageFile(context, value)
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 8.dp)
+                            ) {
+                                AsyncImage(
+                                    model = ImageRequest.Builder(context)
+                                        .data(imageFile)
+                                        .crossfade(true)
+                                        .build(),
+                                    contentDescription = "Embedded image",
+                                    contentScale = ContentScale.FillWidth,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(8.dp))
+                                )
+                                // Delete button
+                                IconButton(
+                                    onClick = {
+                                        val marker = "{{img:$value}}"
+                                        val newText = contentTfv.text.replace("\n$marker\n", "\n")
+                                            .replace("\n$marker", "")
+                                            .replace("$marker\n", "")
+                                            .replace(marker, "")
+                                        onContentChange(TextFieldValue(newText, TextRange(newText.length.coerceAtMost(contentTfv.selection.start))))
+                                        ImageStorage.deleteImage(context, value)
+                                    },
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .padding(4.dp)
+                                        .size(32.dp)
+                                        .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Close,
+                                        contentDescription = "Remove image",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                        } else {
+                            // Editable text segment
+                            var segText by remember(contentTfv.text, index) { mutableStateOf(value) }
+                            BasicTextField(
+                                value = segText,
+                                onValueChange = { newSegText ->
+                                    segText = newSegText
+                                    // Reconstruct full content from segments
+                                    val rebuilt = buildString {
+                                        segments.forEachIndexed { i, (isImg, v) ->
+                                            if (i == index) append(newSegText)
+                                            else if (isImg) append("{{img:$v}}")
+                                            else append(v)
+                                        }
+                                    }
+                                    onContentChange(TextFieldValue(rebuilt, TextRange(rebuilt.length.coerceAtMost(rebuilt.length))))
+                                },
+                                textStyle = TextStyle(
+                                    fontSize = 18.sp,
+                                    color = colors.onSurface,
+                                    lineHeight = 28.sp,
+                                    fontFamily = fontFamily
+                                ),
+                                cursorBrush = SolidColor(colors.accent),
+                                modifier = Modifier.fillMaxWidth(),
+                                decorationBox = { innerTextField ->
+                                    if (segText.isEmpty() && index == 0 && segments.size <= 2) {
+                                        Text(
+                                            "Start writing...",
+                                            fontSize = 18.sp,
+                                            color = colors.muted.copy(alpha = 0.4f)
+                                        )
+                                    }
+                                    innerTextField()
+                                }
+                            )
+                        }
                     }
-                    innerTextField()
                 }
-            )
+            }
         } else {
             // Empty state
             Box(
