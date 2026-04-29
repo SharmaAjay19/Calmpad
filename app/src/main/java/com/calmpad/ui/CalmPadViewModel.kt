@@ -341,18 +341,18 @@ class CalmPadViewModel @Inject constructor(
 
     // ── Backup / Import ──
 
-    fun exportBackupJson(): String {
-        val notes = _state.value.notes
-        val sections = _state.value.sections
+    suspend fun exportBackupJson(): String {
+        val allNotes = noteDao.getAllNotes()
+        val sections = sectionDao.getAllSectionsList()
         val backup = BackupData(
-            notes = notes.map { BackupNote(it.id, it.sectionId, it.title, it.content, it.updatedAt, it.versions) },
+            notes = allNotes.map { BackupNote(it.id, it.sectionId, it.title, it.content, it.updatedAt, it.versions) },
             sections = sections.map { BackupSection(it.id, it.name, it.noteOrder, it.sortIndex) },
             preferences = BackupPreferences(_state.value.theme.name.lowercase(), _state.value.fontFamily)
         )
         return json.encodeToString(backup)
     }
 
-    fun importBackup(jsonString: String) {
+    fun importBackup(jsonString: String, onResult: (Boolean) -> Unit = {}) {
         viewModelScope.launch {
             try {
                 val backup = json.decodeFromString<BackupData>(jsonString)
@@ -364,9 +364,13 @@ class CalmPadViewModel @Inject constructor(
                 }
                 // Reload
                 val sections = sectionDao.getAllSectionsList()
-                val notes = noteDao.getAllNotes().filter { it.sectionId == _state.value.activeSectionId }
+                val activeSectionId = _state.value.activeSectionId
+                val notes = noteDao.getAllNotes().filter { it.sectionId == activeSectionId }
                 _state.update { it.copy(sections = sections, notes = notes) }
-            } catch (_: Exception) { }
+                onResult(true)
+            } catch (_: Exception) {
+                onResult(false)
+            }
         }
     }
 

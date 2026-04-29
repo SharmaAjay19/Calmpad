@@ -2,6 +2,7 @@ package com.calmpad.ui
 
 import android.content.Context
 import android.content.Intent
+import android.widget.Toast
 import android.graphics.pdf.PdfDocument
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -37,6 +38,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.runtime.*
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -252,13 +254,17 @@ fun MainScreen(viewModel: CalmPadViewModel = hiltViewModel()) {
     }
 
     // File launchers
+    val scope = rememberCoroutineScope()
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/json")
     ) { uri ->
         uri?.let {
-            val jsonStr = viewModel.exportBackupJson()
-            context.contentResolver.openOutputStream(it)?.use { os ->
-                os.write(jsonStr.toByteArray())
+            scope.launch {
+                val jsonStr = viewModel.exportBackupJson()
+                context.contentResolver.openOutputStream(it)?.use { os ->
+                    os.write(jsonStr.toByteArray())
+                }
+                Toast.makeText(context, "Backup exported", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -269,7 +275,13 @@ fun MainScreen(viewModel: CalmPadViewModel = hiltViewModel()) {
         uri?.let {
             context.contentResolver.openInputStream(it)?.use { input ->
                 val jsonStr = input.bufferedReader().readText()
-                viewModel.importBackup(jsonStr)
+                viewModel.importBackup(jsonStr) { success ->
+                    Toast.makeText(
+                        context,
+                        if (success) "Backup imported successfully" else "Import failed: invalid file",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
             }
         }
     }
@@ -359,7 +371,7 @@ fun MainScreen(viewModel: CalmPadViewModel = hiltViewModel()) {
                         val date = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
                         exportLauncher.launch("calmpad-backup-$date.json")
                     },
-                    onImport = { importLauncher.launch(arrayOf("application/json")) },
+                    onImport = { importLauncher.launch(arrayOf("application/json", "application/octet-stream", "text/*")) },
                     onPrintNotebook = { printNotebook(context, viewModel) },
                     modifier = Modifier
                         .fillMaxHeight()
