@@ -220,9 +220,16 @@ fun MainScreen(viewModel: CalmPadViewModel = hiltViewModel()) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val colors = appColorScheme(state.theme)
     val context = LocalContext.current
+    val activeNote = state.notes.find { it.id == state.activeNoteId }
+    val isEditMode = activeNote != null && !state.showSidebar
+
+    LaunchedEffect(isEditMode, state.showToolsPanel) {
+        if (!isEditMode && state.showToolsPanel) {
+            viewModel.dismissToolsPanel()
+        }
+    }
 
     // Shared content TextFieldValue state (hoisted here so toolbars can modify it)
-    val activeNote = state.notes.find { it.id == state.activeNoteId }
     var contentTfv by remember(activeNote?.id) {
         mutableStateOf(TextFieldValue(activeNote?.content ?: ""))
     }
@@ -362,7 +369,7 @@ fun MainScreen(viewModel: CalmPadViewModel = hiltViewModel()) {
         }
 
         // Mobile bottom toolbar
-        if (state.notes.any { it.id == state.activeNoteId }) {
+        if (isEditMode) {
             AnimatedVisibility(
                 visible = !state.showToolsPanel,
                 enter = slideInVertically { it },
@@ -384,29 +391,31 @@ fun MainScreen(viewModel: CalmPadViewModel = hiltViewModel()) {
         }
 
         // Tools panel (expanded bottom sheet)
-        AnimatedVisibility(
-            visible = state.showToolsPanel,
-            enter = slideInVertically { it } + fadeIn(),
-            exit = slideOutVertically { it } + fadeOut(),
-            modifier = Modifier.align(Alignment.BottomCenter)
-        ) {
-            ToolsPanel(
-                state = state,
-                colors = colors,
-                onDismiss = { viewModel.dismissToolsPanel() },
-                onH1 = { insertH1(); viewModel.dismissToolsPanel() },
-                onH2 = { insertH2(); viewModel.dismissToolsPanel() },
-                onTable = { insertTable(); viewModel.dismissToolsPanel() },
-                onHighlight = { applyHighlight(); viewModel.dismissToolsPanel() },
-                onItalic = { applyItalic(); viewModel.dismissToolsPanel() },
-                onUnderline = { applyUnderline(); viewModel.dismissToolsPanel() },
-                onFontToggle = {
-                    viewModel.setFont(if (state.fontFamily == "sans") "serif" else "sans")
-                    viewModel.dismissToolsPanel()
-                },
-                onThemeToggle = { viewModel.cycleTheme() },
-                onPrint = { printNote(context, viewModel); viewModel.dismissToolsPanel() }
-            )
+        if (isEditMode) {
+            AnimatedVisibility(
+                visible = state.showToolsPanel,
+                enter = slideInVertically { it } + fadeIn(),
+                exit = slideOutVertically { it } + fadeOut(),
+                modifier = Modifier.align(Alignment.BottomCenter)
+            ) {
+                ToolsPanel(
+                    state = state,
+                    colors = colors,
+                    onDismiss = { viewModel.dismissToolsPanel() },
+                    onH1 = { insertH1(); viewModel.dismissToolsPanel() },
+                    onH2 = { insertH2(); viewModel.dismissToolsPanel() },
+                    onTable = { insertTable(); viewModel.dismissToolsPanel() },
+                    onHighlight = { applyHighlight(); viewModel.dismissToolsPanel() },
+                    onItalic = { applyItalic(); viewModel.dismissToolsPanel() },
+                    onUnderline = { applyUnderline(); viewModel.dismissToolsPanel() },
+                    onFontToggle = {
+                        viewModel.setFont(if (state.fontFamily == "sans") "serif" else "sans")
+                        viewModel.dismissToolsPanel()
+                    },
+                    onThemeToggle = { viewModel.cycleTheme() },
+                    onPrint = { printNote(context, viewModel); viewModel.dismissToolsPanel() }
+                )
+            }
         }
     }
 }
