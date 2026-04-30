@@ -52,19 +52,21 @@ class CalmPadViewModel @Inject constructor(
 
     private fun loadPreferences() {
         viewModelScope.launch {
-            combine(prefs.theme, prefs.font, prefs.activeNoteId, prefs.activeSectionId) { theme, font, noteId, secId ->
-                Triple(theme to font, noteId, secId)
-            }.collect { (themeFont, noteId, secId) ->
-                val (theme, font) = themeFont
-                _state.update {
-                    it.copy(
-                        theme = AppTheme.entries.find { t -> t.name.lowercase() == theme } ?: AppTheme.LIGHT,
-                        fontFamily = font,
-                        activeNoteId = noteId ?: it.activeNoteId,
-                        activeSectionId = secId
-                    )
+            // Load activeNoteId and activeSectionId once on startup
+            val initialNoteId = prefs.activeNoteId.first()
+            val initialSectionId = prefs.activeSectionId.first()
+            _state.update { it.copy(activeNoteId = initialNoteId, activeSectionId = initialSectionId) }
+
+            // Continuously observe theme and font only
+            combine(prefs.theme, prefs.font) { theme, font -> theme to font }
+                .collect { (theme, font) ->
+                    _state.update {
+                        it.copy(
+                            theme = AppTheme.entries.find { t -> t.name.lowercase() == theme } ?: AppTheme.LIGHT,
+                            fontFamily = font
+                        )
+                    }
                 }
-            }
         }
     }
 
@@ -148,6 +150,13 @@ class CalmPadViewModel @Inject constructor(
         viewModelScope.launch {
             _state.update { it.copy(activeNoteId = noteId, showSidebar = false) }
             prefs.setActiveNoteId(noteId)
+        }
+    }
+
+    fun deselectNote() {
+        viewModelScope.launch {
+            _state.update { it.copy(activeNoteId = null, showSidebar = true) }
+            prefs.setActiveNoteId(null)
         }
     }
 

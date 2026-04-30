@@ -3,6 +3,7 @@ package com.calmpad.ui
 import android.content.Context
 import android.content.Intent
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import android.graphics.pdf.PdfDocument
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -228,6 +229,15 @@ fun MainScreen(viewModel: CalmPadViewModel = hiltViewModel()) {
     LaunchedEffect(isEditMode, state.showToolsPanel) {
         if (!isEditMode && state.showToolsPanel) {
             viewModel.dismissToolsPanel()
+        }
+    }
+
+    // Back button: tools panel → close sidebar overlay → deselect note → exit
+    BackHandler(enabled = state.showToolsPanel || state.activeNoteId != null) {
+        when {
+            state.showToolsPanel -> viewModel.dismissToolsPanel()
+            state.showSidebar -> viewModel.setSidebarVisible(false)
+            else -> viewModel.deselectNote()
         }
     }
 
